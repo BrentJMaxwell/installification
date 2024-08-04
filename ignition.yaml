@@ -1,0 +1,141 @@
+---
+# This is the main CoreOS Ignition file for "installing" Mediadepot.
+# It contains configuration that should be customized for each installation (SSH keys, Disk drives, etc.)
+# All other configuration is stored in the ignition.d directory and loaded as modules.
+# These configuration files are heavily commented for ease of use
+#
+# Ignition configuration files are written in YAML, following the syntax shown here:
+#   https://github.com/coreos/container-linux-config-transpiler/blob/master/doc/configuration.md
+# The Ignition YAML files are then "transpiled" to JSON using the CoreOS Configuration Transpiler:
+#   https://github.com/coreos/container-linux-config-transpiler
+#
+
+ignition:
+  config:
+    append:
+    # (Required) The base.json config prepares the filesystem and sets up disk mounting service.
+    - source: https://mediadepot.github.io/ignition/ignition.d/base.json
+
+    # (Required) The mergerfs.json config installs the mergerfs binary and sets up the automation friendly folder structure
+    - source: https://mediadepot.github.io/ignition/ignition.d/mergerfs.json
+
+    # (Required) The portainer.json config installs a Portainer service, which manages a Docker container.
+    # Portainer is used for managing docker containers via a Web UI.
+    - source: https://mediadepot.github.io/ignition/ignition.d/portainer.json
+
+    # (Required) The traefik.json config installs a Traefik service, which manages a Docker container.
+    # Traefik is used to automatically provide a easy-to-remember hostname for each docker container.
+    # eg. sickrage.depot.lan or home.depot.lan
+    - source: https://mediadepot.github.io/ignition/ignition.d/traefik.jso n
+
+    # (Optional) The adguard.json config installs a dns service
+    # A free and open source, powerful network-wide ads & trackers blocking DNS server.
+    - source: https://mediadepot.github.io/ignition/ignition.d/adguard.json
+
+    # (Optional) The samba.json config installs a Samba service, which manages a Docker container.
+    # Samba exposes the storage folder structure as network shares
+    - source: https://mediadepot.github.io/ignition/ignition.d/samba.json
+
+    # (Optional) The notifications.json config sets up a configuration file for enabling PushOver notifications (used by SmartMonTools & System Startup/Shutdown notifications)
+    - source: https://mediadepot.github.io/ignition/ignition.d/notifications.json
+
+    # (Optional) The fs-monitor.json installs a SmartMonTools service, which manages a Docker container.
+    # SmartMonTools tracks the S.M.A.R.T. health status of your disk drives and notifies you if your disk health changes.
+    - source: https://mediadepot.github.io/ignition/ignition.d/fs-monitor.json
+
+    # (Optional) The netdata.json installs a NetData service, which manages a Docker container.
+    # Netdata is a lightweight metric logging service that shows you the current utilization of your server (CPU, RAM, Storage, etc)
+    - source: https://mediadepot.github.io/ignition/ignition.d/netdata.json
+  timeouts: {}
+networkd: {}
+
+# (Required) The users defined in this section are required (core & depot).
+# `core` is the default user for the CoreOS installation.
+# It's the user you will use for making changes as root, via sudo.
+#
+# `depot` is a limited user account, which owns all of your media files. It's uid/gid must be 15000.
+#
+# You should change the ssh_authorized_keys for both users to a key under your control.
+passwd:
+  users:
+  - name: core
+    ssh_authorized_keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB0r9o1G83EZJJjaa//sVyWMKm+W0rqykRPHcY9+yuAp
+  - name: depot
+    uid: 15000
+    primary_group: brent
+    no_user_group: true
+    system: false
+    ssh_authorized_keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUC88zdVOaH844ScOGYraxWOLXfUapy0rTBrIR/75uF
+    shell: "/bin/bash"
+
+# (Required) The directories referenced in this storage block (/mnt/drive*) should be changed to match the number of storage drives on your server
+# The UID and GID should be set to 15000
+storage:
+  directories:
+  - filesystem: root
+    mode: 493 #755
+    path: "/mnt/drive1/"
+    user:
+      id: 15000
+    group:
+      id: 15000
+  files:
+  # (Required) The media-storage mount service is required. It ensures that the disks are correctly mounted before mergerfs starts and mounts its JBOD drive.
+  # The `mnt-*` entries must match the storage directories created above.
+  - filesystem: root
+    path: "/etc/systemd/system/media-storage.mount.d/deps.conf"
+    mode: 420 #644
+    contents:
+      inline: |
+        [Unit]
+        Requires = mnt-drive1.mount
+        After = mnt-drive1.mount
+  - filesystem: root
+    path: "/etc/systemd/system/depot-filesystem.service.d/folders.conf"
+    mode: 420 #644
+    contents:
+      inline: |
+        [Service]
+        Environment="MEDIA_FOLDERS=audiobooks documents ebooks movies music photos software tvshows"
+  - filesystem: root
+    path: "/etc/systemd/system/depot-env.service.d/domain.conf"
+    mode: 420 #644
+    contents:
+      inline: |
+        [Service]
+        Environment="DEPOT_DOMAIN_NAME=maxwell"
+  # (Optional) This configuration file is used by smartmontools to specify which drives to actually watch for failures.
+  - filesystem: root
+    path: "/opt/mediadepot/fs-monitor/config/smartd.conf"
+    mode: 420 #644
+    contents:
+      inline: |
+        # Configuration file for smartd.
+        # -a | monitor all SMART properties
+        # -o | [ATA only] Enables SMART Automatic Offline Testing when smartd starts up and has no further effect. The valid arguments to this Directive are on and off.
+        # -m | Send a warning email to the email address ADD if the '-H', '-l', '-f', '-C', or '-O' Directives detect a failure or a new error, or if a SMART command to the disk fails.
+        # -M | modify the behavior of the smartd email warnings enabled with the '-m' email Directive. un the executable PATH instead of the default mail command, when smartd needs to send email. PATH must point to an executable binary file or script.
+        # -s | Run Self-Tests or Offline Immediate Tests, at scheduled times. A Self- or Offline Immediate Test will be run at the end of periodic device polling, if all 12 characters of the string T/MM/DD/d/HH match the extended regular expression
+        #
+        # S/../.././02 | schedule a short Self-Test between 2-3 am every morning
+        # L/../../6/03 | schedule a long Self-Test between 3-4 am every Saturday morning
+
+        # unfortunately you cant use /dev/disk/by-uuid/988cc439-03f4-4c86-8383-10280783345d when mounting devices into a container, so we're stuck with /dev/sda, sdb, etc.
+        /dev/sda -a -o on -S on -s (S/../.././02|L/../../6/03) -m @ALL -M exec /etc/smartd_warning.sh
+
+# (Required) These systemd services tell CoreOS to mount the specified HD's to the previously created folders.
+# HD's are referenced by UUID as they are static and do not change (even across motherboard upgrades/OS changes).
+systemd:
+  units:
+  - name: mnt-drive1.mount
+    enable: true
+    contents: |-
+      [Mount]
+      What=/dev/disk/by-uuid/806cf4bc-d160-4d96-8ee9-3ab7cf2a2e1f
+      Where=/mnt/drive1
+      Type=ext4
+
+      [Install]
+      WantedBy=local-fs.target
